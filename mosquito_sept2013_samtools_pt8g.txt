@@ -1,0 +1,98 @@
+# mosquito_sept2013_samtools_pt8g.txt
+# sample code for samtools
+
+# sam to bam
+/dh/mariad/maria_mosquito/mozzie_61_bowtie$ 
+samtools view -bS -o 
+bwtie1_mos61_trimmo_Ponly_vs_k137_ctigsv3.bam 
+bwtie1_mos61_trimmo_Ponly_vs_k137_ctigsv3.sam 
+[samopen] SAM header is present: 3 sequences.
+
+# sort bam
+/dh/mariad/maria_mosquito/mozzie_61_bowtie$ 
+samtools sort 
+bwtie1_mos61_trimmo_Ponly_vs_k137_ctigsv3.bam 
+bwtie1_mos61_trimmo_Ponly_vs_k137_ctigsv3-sorted
+
+# index bam
+/dh/mariad/maria_mosquito/mozzie_61_bowtie$ 
+samtools index 
+bwtie1_mos61_trimmo_Ponly_vs_k137_ctigsv3-sorted.bam 
+
+# get alignment stats with idxstats and flagstat
+/dh/mariad/maria_mosquito/mozzie_61_bowtie$ 
+samtools idxstats 
+bwtie1_mos61_trimmo_Ponly_vs_k137_ctigsv3-sorted.bam > 
+bwtie1_mos61_trimmo_Ponly_vs_k137_ctigsv3_idxstats.txt
+
+/dh/mariad/maria_mosquito/mozzie_61_bowtie$ 
+more bwtie1_mos61_trimmo_Ponly_vs_k137_ctigsv3_idxstats.txt 
+
+NODE_1_length_12886_cov_57.209297       13022   67402   0
+NODE_2_length_1528_cov_35.709423        1664    4708    0
+NODE_3_length_456_cov_166.017548        592     9248    0
+*       0       0       117034
+
+/dh/mariad/maria_mosquito/mozzie_61_bowtie$ 
+samtools flagstat 
+bwtie1_mos61_trimmo_Ponly_vs_k137_ctigsv3.bam > 
+bwtie1_mos61_trimmo_Ponly_vs_k137_ctigsv3_flagstat.txt
+
+/dh/mariad/maria_mosquito/mozzie_61_bowtie$ 
+more bwtie1_mos61_trimmo_Ponly_vs_k137_ctigsv3_flagstat.txt 
+
+198392 + 0 in total (QC-passed reads + QC-failed reads)
+0 + 0 duplicates
+81358 + 0 mapped (41.01%:-nan%)
+198392 + 0 paired in sequencing
+99196 + 0 read1
+99196 + 0 read2
+81358 + 0 properly paired (41.01%:-nan%)
+81358 + 0 with itself and mate mapped
+0 + 0 singletons (0.00%:-nan%)
+0 + 0 with mate mapped to a different chr
+0 + 0 with mate mapped to a different chr (mapQ>=5)
+--------------------------------------
+# slim down the file to have the aligned reads only:
+/dh/mariad/maria_mosquito/mozzie_61_bowtie$ 
+samtools view -h -F 4 -o 
+bwtie1_mos61_trimmo_Ponly_vs_k137_ctigsv3_filtF4.sam 
+bwtie1_mos61_trimmo_Ponly_vs_k137_ctigsv3-sorted.bam
+
+# index the genomes with samtools (for igv)
+/dh/mariad/maria_mosquito/bowtie_indexes_mosq$ 
+samtools faidx Agambiae_mito.fasta 
+
+/dh/mariad/maria_mosquito/bowtie_indexes_mosq$ more Agambiae_mito.fasta.fai 
+gi|5834911|ref|NC_002084.1|     15363   78      60      61
+---------------------
+
+# the index is an .fa.fai file or .fasta.fai
+/dh/mariad/maria_mosquito/mozzie_61_assem/mozzie61_run1_vark/_137$ 
+samtools faidx mosq_s61_trimv11b_paired_only_k137_contigs.fa 
+
+/dh/mariad/maria_mosquito/mozzie_61_assem/mozzie61_run1_vark/_137$ ls -lt
+total 126508
+ 148 Sep  9 00:42 mosq_s61_trimv11b_paired_only_k137_contigs.fa.fai
+
+
+/dh/mariad/maria_mosquito/mozzie_61_assem/mozzie61_run1_vark/_137$ 
+more mosq_s61_trimv11b_paired_only_k137_contigs.fa.fai 
+
+NODE_1_length_12886_cov_57.209297       13022   35      60      61
+NODE_2_length_1528_cov_35.709423        1664    13309   60      61
+NODE_3_length_456_cov_166.017548        592     15035   60      61
+
+-----------------------
+# sam/bam  file used with igv has to be indexed
+
+# number of lines in filt and unfiltered sam files:
+
+/dh/mariad/maria_mosquito/mozzie_61_bowtie$ 
+wc -l bwtie1_mos61_trimmo_Ponly_vs_k137_ctigsv3.sam 
+198397 bwtie1_mos61_trimmo_Ponly_vs_k137_ctigsv3.sam
+
+/dh/mariad/maria_mosquito/mozzie_61_bowtie$ 
+wc -l bwtie1_mos61_trimmo_Ponly_vs_k137_ctigsv3_filtF4.sam 
+81363 bwtie1_mos61_trimmo_Ponly_vs_k137_ctigsv3_filtF4.sam
+
