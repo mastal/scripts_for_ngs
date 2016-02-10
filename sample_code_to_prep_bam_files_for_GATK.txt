@@ -1,0 +1,380 @@
+# Maria Stalteri
+# 05/02/2016
+# sample_code_to_prep_bam_files_for_GATK.txt
+
+# Prepare bam files for variant calling
+# with GATK;
+# Uses samtools, Picard, GATK;
+# Start with sorted, indexed bam file;
+# See notes on samtools usage;
+
+# Note that GATK wants chromosomes sorted
+# in karyotypic order, see below;
+
+#####################################
+# 1. MarkDuplicates with Picard;
+# Note Picard needs name of an output file to
+# write Metrics to;
+# Gives a Warning about read names and
+# optical duplicates;
+
+java -jar picard.jar  
+MarkDuplicates 
+INPUT=ERR250379_stampy_v3t12_sorted.bam 
+OUTPUT=ERR250379_stampy_v3t12_sorted_marked.sam
+METRICS_FILE=ERR250379_stampy_MarkDupl_metrics.txt
+
+# GATK doesn't accept sam files,
+# so convert sam to bam,
+# next time get Picard MarkDuplicates to produce bam;
+
+samtools view -bS -o 
+ERR250379_stampy_v3t12_sorted_marked.bam   
+ERR250379_stampy_v3t12_sorted_marked.sam 
+
+######################################
+# 2. GATK will not work without ReadGroups.
+#    so need to add ReadGroup info to the bam file
+
+# Picard AddOrReplaceReadGroups replaces all read 
+# groups with a single read group;
+# this is fine, my bam file contains reads from 
+# one sample only;      
+# Note that RGID must be unique when comparing 
+# multiple bam files;
+
+java -jar 
+///Picard//dist/picard.jar 
+AddOrReplaceReadGroups 
+INPUT=ERR250379_stampy_v3t12_sorted_marked.bam 
+OUTPUT=ERR250379_stampy_v3t12_sorted_marked_rg.bam  
+SORT_ORDER=coordinate 
+RGID=ERR250379 
+RGLB=TruSeq3 
+RGPL=illumina 
+RGPU=AGCGTGTC   
+RGSM=Gambia
+
+#######################################
+# 3. Prepare the reference for use with GATK;
+# 3A. GATK wants chromosomes sorted in karyotypic order,
+#     1,2,3, etc.
+# 3B. Ref needs to be indexed, .fa.fai index;
+# 3C. Ref needs to have a .dict index file as well;
+
+# 3A: Normal Linux ordering joins the fasta files
+#     in the order 10,11,12,...;
+#     GATK needs 1,2,3,...;
+
+#     This cat's the files in the correct order:
+#     cd to the dir with the UCSC hg19  bigZips fasta files;
+#     Use backticks to pipe output of ls into cat;
+
+cat `ls -v` > hg19_masked_num_ord.fa
+
+# 3B. Make fai index (using samtools) for the correctly-ordered ref
+
+samtools faidx hg19_masked_numeric_order.fa
+
+# 3C. Make dict file for the correctly-ordered ref
+#     This requires Picard CreateSequenceDictionary
+
+java -jar picard.jar  
+CreateSequenceDictionary 
+R=hg19_masked_num_ord.fa 
+O=hg19_masked_num_ord.dict
+
+#########################################
+# 4. Now sam/bam files need to be resorted according to the order
+#    of the new reference;
+
+# Next time, obviously, make sure that ref chromosomes are in the
+# correct order in the ref file before alignment, and before
+# sorting/indexing the bam if want to use GATK;
+
+# Picard ReorderSam
+
+# 4a. the bam file needs to be indexed,
+#     it works faster if bam file is indexed;
+
+#     Obviously, again, next time if know we want to use GATK,
+#     add ReadGroups and MarkDuplicates before indexing the file,
+#     unless those steps also require an indexed bam,
+#     in which case will have to use samtools index more than once.
+       
+samtools index ERR250379_stampy_v3t12_sorted_marked_rg.bam 
+
+# 4b. Picard ReorderSam
+
+java -jar picard.jar 
+ReorderSam 
+INPUT=ERR250379_stampy_v3t12_sorted_marked_rg.bam 
+OUTPUT=ERR250379_stampy_v3t12_sorted_marked_rg_reord.bam  
+R=genome_indexes/hg19_masked_num_ord.fa
+
+# 4c. have a quick look at the sam file
+      # note that you need -h if you want a header;
+
+samtools view
+-h
+-o ERR250379_stampy_v3t12_sorted_marked_rg_reord.sam
+ERR250379_stampy_v3t12_sorted_marked_rg_reord.bam
+
+#####################################################
+# 5. index the latest, reordered bam file,
+#    GATK throws errors if index is missing;
+
+samtools index
+ERR250379_stampy_v3t12_sorted_marked_rg_reord.bam
+
+####################################################
+# Realign around Indels consists of 2 steps:
+# 6. RealignerTargetCreator
+# 7. IndelRealigner
+
+####################################################
+# 6. RealignerTargetCreator
+
+# Note that for exome data it is recommended to restrict
+# analysis to the target intervals, so need a file with
+# the exon coordinates used by the targeted capture method 
+# used for the library prep;
+
+# 6a. for WGS, whole genome data
+
+java -jar /usr/local/src/GATK/GenomeAnalysisTK.jar
+-T RealignerTargetCreator
+-R genome_indexes/hg19_masked_num_ord.fa
+-I ERR250379_stampy_v3t12_sorted_marked_rg_reord.bam
+-o ERR250379_stampy_marked_rg_reord_realigner.intervals
+
+# 6b. for WEX, whole exome data
+
+java -jar /usr/local/src/GATK/GenomeAnalysisTK.jar 
+-T RealignerTargetCreator 
+-R genome_indexes/hg19_masked_num_ord.fa  
+-I ERR250379_stampy_v3t12_sorted_marked_rg_reord.bam 
+-o ERR250379_stampy_marked_rg_reord_realigner_ex.intervals 
+-L 20110225.called_exome_targets.consensus.bed    
+--interval_padding 100
+
+#####################################################
+# 7. IndelRealigner
+
+#    Note: use same input files used in RealignerTargetCreator step;
+
+#    Run as below, using nohup and -Xmx64g, ran in 20 min;
+#    Two previous attempts, without nohup, with and without the 
+#    -Xmx64g flag, seemed to get stuck without doing anything,
+#    until I killed the jobs at between 2 and 3hr;
+
+nohup
+java -Xmx64g 
+-jar /usr/local/src/GATK/GenomeAnalysisTK.jar 
+-T IndelRealigner 
+-R genome_indexes/hg19_masked_num_ord.fa  
+-I ERR250379_stampy_v3t12_sorted_marked_rg_reord.bam  
+-targetIntervals ERR250379_stampy_marked_rg_reord_realigner_ex.intervals   
+-o ERR250379_stampy_v3t12_sorted_marked_rg_reord_realgn.bam
+
+# 7b. make a sam file to examine with grep
+samtools view -h  
+ERR250379_stampy_v3t12_sorted_marked_rg_reord_realgn.bam > 
+ERR250379_stampy_v3t12_sorted_marked_rg_reord_realgnV3.sam
+
+#####################################################
+# Base Quality Recalibration is also a 2-step process;
+# 8. BaseRecalibrator
+# 9. PrintReads
+# 10. AnalyzeCovariates # make before/after plots;
+#####################################################
+# 8. Base Recalibrator
+
+# 8a.
+# need to download known variants vcf for hg19 from
+# the Broad's download site for GATK resource bundle:
+# See below;
+# and also know indels vcf;
+
+# 8b.
+# throws an error, because bam file is not sorted in 
+# same order as vcf files;
+# Get hg19 fasta, fasta.fai, and .dict files from 
+# the Broad, and ReorderSam again,
+# according to these files;
+
+java -jar 
+picard.jar \
+ReorderSam \ 
+INPUT=ERR250379_stampy_v3t12_sorted_marked_rg_reord_realgn.bam \ 
+OUTPUT=ERR250379_stampy_v3t12_sorted_marked_rg_reord_realgn_reordBR.bam \ 
+R=genome_indexes/ucsc.hg19.fasta
+
+# 8c. need to index the new bam file
+
+samtools index \
+ERR250379_stampy_v3t12_sorted_marked_rg_reord_realgn_reordBR.bam
+
+# 8d. Try the BaseRecalibrator again
+
+# run with nohup, it may take a while
+
+nohup java   -jar GenomeAnalysisTK.jar \
+-T BaseRecalibrator \
+-R genome_indexes/ucsc.hg19.fasta  \
+-I ERR250379_stampy_v3t12_sorted_marked_rg_reord_realgn_reordBR.bam \
+-knownSites genome_indexes/dbsnp_138.hg19.excluding_sites_after_129.vcf 
+-knownSites genome_indexes/Mills_and_1000G_gold_standard.indels.hg19.sites.vcf \
+-o ERR250379_run2_recal.table \
+-L 20110225.called_exome_targets.consensus.bed \
+--interval_padding 100
+
+#####################################################
+# 9. PrintReads
+
+# Note: I don't understand why in the Best Practices they
+# do the PrintReads step after 1 round of BaseRecalibrator,
+# whereas they do the before/after plots after a second
+# round of BaseRecalibrator;
+# this doesn't make sense to me, if you're going to do
+# two rounds of Recalibration, why use the reads after
+# just one round???
+
+# Note that this also produces a .bai index for the
+# bam output file;
+nohup  java -jar /usr/local/src/GATK/GenomeAnalysisTK.jar \
+-T PrintReads  \
+-R genome_indexes/ucsc.hg19.fasta  \
+-I ERR250379_stampy_v3t12_sorted_marked_rg_reord_realgn_reordBR.bam \
+-BQSR ERR250379_run2_recal.table \
+-o ERR250379_stampy_v3t12_sorted_marked_rg_reord_realgn_reordBR_recal.bam
+
+######################################################
+# 10. Before the AnalyzeCovariates step, they do a
+#     second round with BaseRecalibrator
+
+nohup java -jar /usr/local/src/GATK/GenomeAnalysisTK.jar \
+-T BaseRecalibrator  \
+-R genome_indexes/ucsc.hg19.fasta  \
+-I ERR250379_stampy_v3t12_sorted_marked_rg_reord_realgn_reordBR.bam \
+-knownSites genome_indexes/dbsnp_138.hg19.excluding_sites_after_129.vcf \
+-knownSites genome_indexes/Mills_and_1000G_gold_standard.indels.hg19.sites.vcf \
+-o ERR250379_after_recal.table \
+-BQSR ERR250379_run2_recal.table \
+-L 20110225.called_exome_targets.consensus.bed \
+--interval_padding 100
+
+######################################################
+# 11. AnalyzeCovariates
+
+# exits with error 'RScript exited with 1. 
+# Run with -l DEBUG for more info.'
+
+# Apparently there are some R dependencies
+# that need to be installed
+
+nohup java -jar GenomeAnalysisTK.jar \
+-T AnalyzeCovariates  \
+-R genome_indexes/ucsc.hg19.fasta  \
+-after ERR250379_after_recal.table \
+-before ERR250379_run2_recal.table  \
+-plots ERR250379_recal_plots.pdf
+
+# 11b. 
+# may need the R packages ggplot2 and gsalib 
+# R version 3.2.0 (2015-04-16)
+# ggplot2 is installed;
+# gsalib is not installed;
+
+# version of ggplot2 is
+ggplot2_1.0.1
+
+# version of GATK is:
+3.3-0
+
+# According to GATK Forums, should not be a problem
+# if GATK version is > 3.2;
+
+# check for R packages reshape and gplots
+# packages reshape, gplots,and gsalib are 
+# not installed;
+
+# run R, then
+install.packages("gsalib")
+library(gsalib)
+
+# this worked, repeat procedure for packages
+# reshape, gplots
+
+# package versions installed
+sessionInfo()
+
+# gplots_2.17.0 
+# reshape_0.8.5 
+# gsalib_2.1
+
+# 11c. Run AnalyzeCovariates again
+
+# Do I need to set some variable, like Rlibs,
+# to tell R where to find the newly-installed packages?
+
+# No, it worked;
+
+nohup java -jar /usr/local/src/GATK/GenomeAnalysisTK.jar 
+-T AnalyzeCovariates 
+-R genome_indexes/ucsc.hg19.fasta 
+-before ERR250379_run2_recal.table 
+-after ERR250379_after_recal.table 
+-plots ERR250379_recal_plots.pdf
+
+######################################################
+######################################################
+# 12. Now should be ready to call variants with GATK
+
+######################################################
+######################################################
+# these are just the basic steps,
+# GATK includes many other tools that produce lots of 
+# QC-type Metrics;
+
+# the Broad pipeline starts from uSAM, unaligned SAM files
+# rather than Fastq;
+
+#####################################################
+#####################################################
+
+# data files sources:
+
+# hg19 human genome: GRCh37/hg19
+
+http://hgdownload.soe.ucsc.edu/downloads.html
+http://hgdownload.soe.ucsc.edu/goldenPath/hg19/bigZips/chromFaMasked.tar.gz
+
+# 1000 genomes consensus exome targets:
+ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/phase1/analysis_results/supporting/exome_pull_down/20110225.called_exome_targets.consensus.bed
+
+# stampy aligner:
+http://www.well.ox.ac.uk/project-stampy
+
+# Resources for GATK from the Broad Institute
+https://www.broadinstitute.org/gatk/guide/article?id=1215
+
+ftp://gsapubftp-anonymous@ftp.broadinstitute.org/bundle/2.8/hg19/
+
+# files to download:
+dbsnp_138.hg19.excluding_sites_after_129.vcf.gz
+
+Mills_and_1000G_gold_standard.indels.hg19.sites.vcf.gz
+
+# note that this also includes hg19.fasta, which has
+# chromosomes/contigs in correct order for GATK;
+# chrM, chr1, chr2, chr3...cgrX, chrY, then the 
+# smaller contigs, then ChrUn;
+
+ucsc.hg19.fasta.gz
+
+# and fa.fai and .dict files for hg19.fasta;
+
+######################################################
+######################################################
+
