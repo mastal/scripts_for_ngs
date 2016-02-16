@@ -1,0 +1,198 @@
+# Maria Stalteri
+# 15/02/2016
+# streamlined_code_to_prep_bam_files_for_GATK.txt
+
+# To make life easier:
+# A. The GATK Resource bundle has genome fasta
+#    files ordered in the way GATK wants,
+#    and also .fai and .dict indexes for these;
+
+# B. Start with bam files aligned to a genome
+#    that has the chromosomes/contigs in the right order 
+#    (karyotypic, with chrM at the start, and
+#    chrUn contigs at the end)
+#    for use with GATK;
+
+# C. Sort and index the bamfiles with samtools.
+
+# D. AnalyzeCovariates has dependencies on several
+#    R packages. Check whether these are installed
+#    and install them if they are not.
+
+###################################################
+# Note that the GATK Best Practices lecture shows
+# doing MarkDuplicates before AddOrReplaceReadGroups.
+# Next time do it in that order.
+
+##################################################
+# 1. Add Read Groups
+
+java -jar 
+/usr/local/src/Picard/.../dist/picard.jar  
+AddOrReplaceReadGroups 
+INPUT=ERR250410_trv2b_33_stampy_sorted.bam 
+OUTPUT=ERR250410_trv2b_33_stampy_sorted_rg.bam  
+SORT_ORDER=coordinate 
+RGID=ERR250410 
+RGLB=TruSeq3 
+RGPL=illumina 
+RGPU=TTGGCGCC  
+RGSM=Gambia2
+
+#####################################################
+# 2. Mark Duplicates
+
+# 2a. Throws exception if you don't have 
+#     an index for the bam file.
+
+#     Samtools index
+
+samtools index
+ERR250410_trv2b_33_stampy_sorted_rg.bam
+
+# 2b. Picard MarkDuplicates
+
+java -jar picard.jar  
+MarkDuplicates   
+INPUT=ERR250410_trv2b_33_stampy_sorted_rg.bam 
+OUTPUT=ERR250410_trv2b_33_stampy_sorted_rg_md.bam  
+METRICS_FILE=ERR250410_stampy_MarkDupl_metrics.txt
+
+######################################################
+# 3. Need .fai and .dict indexes for the ref genome;
+
+# Create the indexes now if they don't already exist;
+
+# 3a. Using samtools.
+
+samtools faidx ucsc.hg19.fasta
+
+# 3b. Using Picard.
+
+java -jar picard.jar
+CreateSequenceDictionary
+R=ucsc.hg19.fasta
+O=ucsc.hg19.dict
+
+#########################################################
+# 4. RealignAroundIndels 
+#    Step 1: RealignerTargetCreator
+
+# 4a. Throws errors if the bam file has no index.
+#     Index the bam file
+
+samtools index
+ERR250410_trv2b_33_stampy_sorted_rg_md.bam
+
+# 4b. RealignerTargetCreator
+#     For exome data, use the -L and 
+#     --interval_padding parameters.
+
+nohup 
+java -jar /usr/local/src/GATK/GenomeAnalysisTK.jar  
+-T RealignerTargetCreator 
+-R genome_indexes/ucsc.hg19.fasta 
+-I ERR250410_trv2b_33_stampy_sorted_rg_md.bam 
+-o ERR250410_stampy_rg_realigner_ex.intervals  
+-L 20110225.called_exome_targets.consensus.bed 
+--interval_padding 100
+
+#########################################################
+# 5. RealignAroundIndels
+#    Step 2: IndelRealigner
+
+# Use the same bam file as Input as for RealignerTargetCreator
+# above, and use the intervals file from that step;
+# Also produces a .bai index for the bam output file;
+
+nohup \
+java -Xmx64g \
+-jar /usr/local/src/GATK/GenomeAnalysisTK.jar \
+-T IndelRealigner \
+-R genome_indexes/ucsc.hg19.fasta \  
+-I ERR250410_trv2b_33_stampy_sorted_rg_md.bam \
+-targetIntervals ERR250410_stampy_rg_realigner_ex.intervals \ 
+-o ERR250410_trv2b_33_stampy_sorted_rg_md_realgn.bam
+
+###########################################################
+# 6. BQSR, Base Quality Score Recalibration
+#    Step 1: BaseRecalibrator
+
+# 6a. Need to download known variants vcf for hg19 from
+#     the Broad's download site for GATK resource bundle:
+#     And also know indels vcf;  
+
+# 6b. BaseRecalibrator
+
+#     For exome data, use the -L and --interval_padding
+#     parameters again.
+
+nohup 
+java -Xmx64g 
+-jar /usr/local/src/GATK/GenomeAnalysisTK.jar 
+-T BaseRecalibrator 
+-R genome_indexes/ucsc.hg19.fasta  
+-I ERR250410_trv2b_33_stampy_sorted_rg_md_realgn.bam  
+-knownSites genome_indexes/dbsnp_138.hg19.excluding_sites_after_129.vcf 
+-knownSites genome_indexes/Mills_and_1000G_gold_standard.indels.hg19.sites.vcf 
+-o ERR250410_recal.table 
+-L 20110225.called_exome_targets.consensus.bed  
+--interval_padding 100
+
+##############################################################
+#  7. BQSR
+#     Step 2: PrintReads 
+
+# This also produces a .bai index for the bam output file.
+# Ran in about 1 hour.
+
+nohup 
+java -Xmx64g 
+-jar /usr/local/src/GATK/GenomeAnalysisTK.jar 
+-T PrintReads 
+-R genome_indexes/ucsc.hg19.fasta  
+-I ERR250410_trv2b_33_stampy_sorted_rg_md_realgn.bam   
+-o ERR250410_trv2b_33_stampy_sorted_rg_md_realgn_recal.bam 
+-BQSR ERR250410_recal.table 
+
+#########################################################
+#  8. BQSR
+#     Step 3: Another round of BaseRecalibrator.
+
+# Note that you use the original realigned bam file,
+# the same one that was used as input for the first 
+# round with BaseRecalibrator.
+# Took about 1h to run.
+
+nohup 
+java -Xmx64g 
+-jar /usr/local/src/GATK/GenomeAnalysisTK.jar 
+-T BaseRecalibrator 
+-R genome_indexes/ucsc.hg19.fasta  
+-I ERR250410_trv2b_33_stampy_sorted_rg_md_realgn.bam  
+-knownSites genome_indexes/dbsnp_138.hg19.excluding_sites_after_129.vcf 
+-knownSites genome_indexes/Mills_and_1000G_gold_standard.indels.hg19.sites.vcf 
+-o ERR250410_after_recal.table -BQSR ERR250410_recal.table 
+-L 20110225.called_exome_targets.consensus.bed  
+--interval_padding 100
+
+##################################################################
+# 9. BQSR 
+     Step 4: AnalyzeCovariates
+
+# Note that this has a few R dependencies,
+# and will not run unless those R packages are installed.
+
+# Ran in a few seconds.
+
+nohup 
+java -Xmx64g 
+-jar /usr/local/src/GATK/GenomeAnalysisTK.jar 
+-T AnalyzeCovariates 
+-R genome_indexes/ucsc.hg19.fasta 
+-before ERR250410_recal.table 
+-after ERR250410_after_recal.table 
+-plots ERR250410_recal_plots.pdf 
+
+###################################################################
+# Now have Analysis Ready Reads.
