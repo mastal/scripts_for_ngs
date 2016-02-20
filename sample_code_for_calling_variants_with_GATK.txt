@@ -1,0 +1,271 @@
+# Maria Stalteri
+# 10/02/2016
+# sample_code_for_calling_variants_with_GATK.txt
+
+# starting from Analysis-Ready reads, 
+# bam files that have gone through 
+# realignment around indels and BQSR
+# with the GATK pipeline;
+
+#####################################################
+# 1. HaplotypeCaller on a single sample;
+
+# takes about 2h to run;
+
+nohup java -jar /usr/local/src/GATK/GenomeAnalysisTK.jar
+-T HaplotypeCaller
+-R genome_indexes/ucsc.hg19.fasta
+-I ERR250379_stampy_v3t12_sorted_marked_rg_reord_realgn_reordBR_recal.bam
+-o ERR250379_HC.g.vcf
+-ERC GVCF
+--variant_index_type LINEAR
+--variant_index_parameter 128000
+-L 20110225.called_exome_targets.consensus.bed
+--interval_padding 100
+
+##########################################################
+
+# 2. Need to get some samples or gvcfs to do joint genotyping;
+
+#    Run HaplotypeCaller on a second sample,
+#    in order to be able to do joint genotyping.
+
+#    More would be better, but I might run out of computer memory
+#    or disk space. 
+#    Note that for exome data, they recommend genotyping at least
+#    30 samples. 
+ 
+#    Took about 2h to run.
+
+nohup
+java -Xmx64g
+-jar /usr/local/src/GATK/GenomeAnalysisTK.jar
+-T HaplotypeCaller
+-R genome_indexes/ucsc.hg19.fasta
+-I ERR250410_trv2b_33_stampy_sorted_rg_md_realgn_recal.bam   
+-o ERR250410_HC.g.vcf -ERC GVCF
+--variant_index_type LINEAR
+--variant_index_parameter 128000
+-L 20110225.called_exome_targets.consensus.bed 
+--interval_padding 100
+
+###########################################################
+# 3. Joint Genotyping
+
+# For more than 200 samples, use CombineGVCFs first.
+
+# Note that HaplotypeCaller produces .vcf.idx files for
+# the .g.vcf files.
+
+nohup 
+java -Xmx64g 
+-jar /usr/local/src/GATK/GenomeAnalysisTK.jar 
+-T GenotypeGVCFs 
+-R genome_indexes/ucsc.hg19.fasta 
+-V ERR250379_HC.g.vcf 
+-V ERR250410_HC.g.vcf   
+-o ERR250_379_410.vcf  
+
+#############################################################
+# 4. VQSR
+#    Do 2 passes with 2 steps each.
+#    Step 1: VariantRecalibrator
+#    Step 2: ApplyRecalibration
+#    First pass: Steps 1 and 2 on SNPs only.
+#    Second pass: Steps 1 and 2 on indels only.
+
+# Need to get more resources from the GATK
+# resource bundle before running this:
+# SNP and indel data from, e.g.
+# !000 genomes,
+# HapMap,
+# dbSNP,
+# Omni2.5 (Illumina genotyping array?).
+
+# It doesn't seem to work with gzipped
+# files, so need to gunzip first.
+
+# Doesn't recognize gzipped index,
+# will create index for the resource files
+# if it doen't exist;
+
+# The GATK web pages have a guide for VQSR.
+https://www.broadinstitute.org/gatk/guide/article?id=1259
+
+# This is an FAQ guide, dated 2014-12-17.
+
+# See below, 4a2, 4b2, re-running VQSR for SNPs,
+# according to the recommendations.
+
+# 4a. VariantRecalibrator on SNPs.
+
+#     Ran in < 10 min.
+ 
+nohup 
+java -Xmx64g 
+-jar /usr/local/src/GATK/GenomeAnalysisTK.jar 
+-T VariantRecalibrator 
+-R genome_indexes/ucsc.hg19.fasta 
+-input ERR250_379_410.vcf  
+-resource:hapmap,known=false,training=true,truth=true,prior=15.0 
+  genome_indexes/hapmap_3.3.hg19.sites.vcf 
+-resource:omni,known=false,training=true,truth=false,prior=12.0 
+  genome_indexes/1000G_omni2.5.hg19.sites.vcf 
+-resource:1000G,known=false,training=true,truth=false,prior=10.0 
+  genome_indexes/1000G_phase1.snps.high_confidence.hg19.sites.vcf   
+-resource:dbsnp,known=true,training=false,truth=false,prior=2.0  
+  genome_indexes/dbsnp_138.hg19.excluding_sites_after_129.vcf 
+-an DP 
+-an QD 
+-an FS 
+-an MQRankSum  
+-mode SNP 
+-recalFile ERR250_379_410_raw_SNPs.recal 
+-tranchesFile ERR250_379_410_raw_SNPs.tranches 
+-rscriptFile ERR250_379_410_SNPs_recal_plots.R 
+
+# This produced 6 output files:
+       562 Feb 17 20:18 ERR250_379_410_raw_SNPs.tranches
+   1163025 Feb 17 20:18 ERR250_379_410_SNPs_recal_plots.R
+   2887289 Feb 17 20:18 ERR250_379_410_SNPs_recal_plots.R.pdf
+      8351 Feb 17 20:18 ERR250_379_410_raw_SNPs.tranches.pdf
+   7493369 Feb 17 20:18 ERR250_379_410_raw_SNPs.recal
+    817030 Feb 17 20:18 ERR250_379_410_raw_SNPs.recal.idx
+     14801 Feb 17 20:18 nohup.out
+
+#######################################################
+# 4b. ApplyRecalibration on SNPs.
+
+#    This produces a calibrated SNPs file and an index
+#    for the file.
+
+#    Ran in about a minute.
+
+nohup 
+java -Xmx64g 
+-jar /usr/local/src/GATK/GenomeAnalysisTK.jar 
+-T ApplyRecalibration 
+-R genome_indexes/ucsc.hg19.fasta 
+-input ERR250_379_410.vcf   
+-mode SNP 
+-recalFile ERR250_379_410_raw_SNPs.recal 
+-tranchesFile  ERR250_379_410_raw_SNPs.tranches 
+-o ERR250_379_410_recal.SNPs.vcf 
+-ts_filter_level 99.0
+
+########################################################
+# 4a2. Re-run VariantRecalibrator for SNPs.
+
+#      Change parameters according to recommendations
+#      for exomes, and for few samples.
+
+# 1. The 2014 guide says use truth=true for the Omni data.
+# 2. THe DP annotation shouldn't be used for exome data.
+# 3. Don't use -an InbreedingCoeff for < 10 samples or
+#    closely related samples.
+# 4. Use at least 30 samples; Get data from 1000 genomes
+#    exome datasets.
+# 5. For few datasets, try --maxGaussians 4.
+# 6. Additional annotations that they use:
+#    -an MQ 
+#    -an ReadPosRankSum
+#    -an SOR
+
+# Ran in 14 min.
+
+nohup 
+java -Xmx64g 
+-jar /usr/local/src/GATK/GenomeAnalysisTK.jar 
+-T VariantRecalibrator 
+-R genome_indexes/ucsc.hg19.fasta 
+-input ERR250_379_410.vcf  
+-resource:hapmap,known=false,training=true,truth=true,prior=15.0 
+  genome_indexes/hapmap_3.3.hg19.sites.vcf 
+-resource:omni,known=false,training=true,truth=true,prior=12.0 
+  genome_indexes/1000G_omni2.5.hg19.sites.vcf 
+-resource:1000G,known=false,training=true,truth=false,prior=10.0 
+  genome_indexes/1000G_phase1.snps.high_confidence.hg19.sites.vcf   
+-resource:dbsnp,known=true,training=false,truth=false,prior=2.0  
+  genome_indexes/dbsnp_138.hg19.excluding_sites_after_129.vcf 
+-an QD 
+-an FS 
+-an MQ 
+-an MQRankSum 
+-an ReadPosRankSum 
+-an SOR 
+-mode SNP 
+--maxGaussians 4 
+-recalFile ERR250_379_410_raw_SNPs_V2.recal 
+-tranchesFile  ERR250_379_410_raw_SNPs_V2.tranches 
+-rscriptFile ERR250_379_410_SNPs_V2_recal_plots.R 
+
+###########################################################
+# 4b2. Re-run the ApplyRecalibration for SNPs.
+
+# the guide mentioned above recommends
+# --ts_filter_level 99.5
+# I will leave the setting at 99.0,
+# seeing as my dataset is not diverse in
+# terms of world populations.
+
+# so no changes, except work with the
+# files genrated in 4a2 above.
+# Ran in less than a minute.
+
+nohup
+java -Xmx64g
+-jar /usr/local/src/GATK/GenomeAnalysisTK.jar
+-T ApplyRecalibration
+-R genome_indexes/ucsc.hg19.fasta
+-input ERR250_379_410.vcf
+-mode SNP
+-recalFile ERR250_379_410_raw_SNPs_V2.recal
+-tranchesFile  ERR250_379_410_raw_SNPs_V2.tranches 
+-o ERR250_379_410_recal_V2.SNPs.vcf 
+-ts_filter_level 99.0
+
+################################################################
+# 4c. Run VariantRecalibrator for indels.
+
+# Ran in 4 min.
+
+nohup 
+java -Xmx64g 
+-jar /usr/local/src/GATK/GenomeAnalysisTK.jar 
+-T VariantRecalibrator 
+-R genome_indexes/ucsc.hg19.fasta 
+-input ERR250_379_410.vcf  
+-resource:mills,known=false,training=true,truth=true,prior=12.0 
+  genome_indexes/Mills_and_1000G_gold_standard.indels.hg19.sites.vcf   
+-resource:dbsnp,known=true,training=false,truth=false,prior=2.0  
+  genome_indexes/dbsnp_138.hg19.excluding_sites_after_129.vcf  
+-an QD 
+-an FS 
+-an SOR 
+-an ReadPosRankSum 
+-an MQRankSum 
+--maxGaussians 4  
+-mode INDEL 
+-recalFile ERR250_379_410_raw_indels.recal 
+-tranchesFile  ERR250_379_410_raw_indels.tranches 
+-rscriptFile ERR250_379_410_indels_recal_plots.R 
+
+###################################################################
+# 4d. Run ApplyRecalibration for indels.
+
+# Ran in < 1 min.
+
+nohup 
+java -Xmx64g 
+-jar /usr/local/src/GATK/GenomeAnalysisTK.jar 
+-T ApplyRecalibration 
+-R genome_indexes/ucsc.hg19.fasta 
+-input ERR250_379_410.vcf   
+-mode INDEL 
+-recalFile ERR250_379_410_raw_indels.recal 
+-tranchesFile  ERR250_379_410_raw_indels.tranches 
+-o ERR250_379_410_recal.Indels.vcf 
+-ts_filter_level 99.0
+
+######################################################################
+# Analysis-Ready Variants.
